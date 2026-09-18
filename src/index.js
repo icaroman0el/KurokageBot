@@ -7,6 +7,7 @@ const {
   Client,
   Events,
   GatewayIntentBits,
+  MessageFlags,
   PermissionFlagsBits,
   REST,
   Routes,
@@ -433,6 +434,16 @@ async function handleTicketPanel(interaction) {
 async function createTicketForInteraction(interaction) {
   const guild = interaction.guild;
   const user = interaction.user;
+
+  console.log(`Ticket create started for ${user.tag} (${user.id})`);
+
+  await guild.channels.fetch().catch((error) => {
+    console.error("Failed to refresh guild channels before ticket create:", error);
+  });
+  await guild.roles.fetch().catch((error) => {
+    console.error("Failed to refresh guild roles before ticket create:", error);
+  });
+
   const existing = guild.channels.cache.find(
     (channel) =>
       channel.type === ChannelType.GuildText &&
@@ -440,6 +451,7 @@ async function createTicketForInteraction(interaction) {
   );
 
   if (existing) {
+    console.log(`Existing ticket found for ${user.id}: ${existing.id}`);
     return {
       created: false,
       message: `Você já tem um ticket aberto: ${existing}.`
@@ -447,6 +459,7 @@ async function createTicketForInteraction(interaction) {
   }
 
   const category = await getOrCreateTicketCategory(guild);
+  console.log(`Ticket category ready: ${category.id}`);
   const channel = await guild.channels.create({
     name: `ticket-${normalizeTicketName(user.username) || user.id}`,
     type: ChannelType.GuildText,
@@ -454,6 +467,7 @@ async function createTicketForInteraction(interaction) {
     topic: `ticket-owner:${user.id}`,
     permissionOverwrites: buildTicketPermissionOverwrites(guild, user.id, client.user.id)
   });
+  console.log(`Ticket channel created: ${channel.id}`);
 
   const staffRoles = getTicketStaffRoles(guild);
 
@@ -483,6 +497,7 @@ async function createTicketForInteraction(interaction) {
       }
     ]
   });
+  console.log(`Ticket intro sent in channel: ${channel.id}`);
 
   return {
     created: true,
@@ -491,9 +506,25 @@ async function createTicketForInteraction(interaction) {
 }
 
 async function handleTicketCreate(interaction) {
-  await interaction.deferReply({ ephemeral: true });
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   const result = await createTicketForInteraction(interaction);
-  await interaction.editReply(result.message);
+
+  await interaction.editReply({
+    content: result.message
+  });
+}
+
+async function handleTicketButtonCreate(interaction) {
+  console.log(`Ticket button acknowledge started for ${interaction.user.tag} (${interaction.user.id})`);
+  await interaction.deferUpdate();
+  console.log(`Ticket button acknowledged for ${interaction.user.id}`);
+
+  const result = await createTicketForInteraction(interaction);
+
+  await interaction.followUp({
+    flags: MessageFlags.Ephemeral,
+    content: result.message
+  });
 }
 
 async function handleTicketClose(interaction) {
@@ -911,7 +942,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.isButton()) {
       if (interaction.customId === "ticket_open" || interaction.customId === "ticket:create") {
-        await handleTicketCreate(interaction);
+        await handleTicketButtonCreate(interaction);
       }
 
       return;
@@ -972,10 +1003,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     const content = "Algo deu errado ao executar essa ação. A staff já pode verificar os logs do Kurokage.";
 
-    if (interaction.deferred || interaction.replied) {
+    if (interaction.isButton() && (interaction.deferred || interaction.replied)) {
+      await interaction.followUp({ content, flags: MessageFlags.Ephemeral }).catch(() => null);
+    } else if (interaction.deferred || interaction.replied) {
       await interaction.editReply({ content }).catch(() => null);
     } else {
-      await interaction.reply({ content, ephemeral: true }).catch(() => null);
+      await interaction.reply({ content, flags: MessageFlags.Ephemeral }).catch(() => null);
     }
   }
 });
