@@ -1,5 +1,4 @@
 const {
-  ActivityType,
   ChannelType,
   Client,
   Events,
@@ -378,12 +377,7 @@ client.once(Events.ClientReady, async (readyClient) => {
   console.log(`Kurokage is online as ${readyClient.user.tag}.`);
 
   readyClient.user.setPresence({
-    activities: [
-      {
-        name: "Ultra Cursos Academy",
-        type: ActivityType.Watching
-      }
-    ],
+    activities: [],
     status: "online"
   });
 
