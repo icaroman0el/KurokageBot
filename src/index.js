@@ -64,6 +64,8 @@ const statusEmojiId = process.env.DISCORD_STATUS_EMOJI_ID || "155054960204081561
 const statusEmojiName = process.env.DISCORD_STATUS_EMOJI_NAME || "LETSGO";
 const statusText =
   process.env.DISCORD_STATUS_TEXT || "Eu caminho onde a luz nao alcanca...";
+const welcomeChannelName = process.env.DISCORD_WELCOME_CHANNEL || "entrada";
+const goodbyeChannelName = process.env.DISCORD_GOODBYE_CHANNEL || "saida";
 
 if (!token) {
   console.error("DISCORD_TOKEN nao foi configurado.");
@@ -181,6 +183,124 @@ function normalizeChannelName(name) {
 
 function hasPermission(interaction, permission) {
   return interaction.memberPermissions?.has(permission);
+}
+
+function findTextChannelByName(guild, name) {
+  return guild.channels.cache.find(
+    (channel) =>
+      channel.type === ChannelType.GuildText &&
+      channel.name.toLowerCase() === name.toLowerCase()
+  );
+}
+
+function formatDiscordTimestamp(date, style = "R") {
+  return `<t:${Math.floor(date.getTime() / 1000)}:${style}>`;
+}
+
+function getPublicRoleNames(member) {
+  return member.roles.cache
+    .filter((role) => role.name !== "@everyone" && !role.managed)
+    .sort((a, b) => b.position - a.position)
+    .map((role) => role.name);
+}
+
+async function sendWelcomeMessage(member) {
+  const channel = findTextChannelByName(member.guild, welcomeChannelName);
+
+  if (!channel) {
+    console.warn(`Welcome channel not found: ${welcomeChannelName}`);
+    return;
+  }
+
+  const joinedAt = new Date();
+  const accountAge = formatDiscordTimestamp(member.user.createdAt);
+
+  await channel.send({
+    content: [
+      `Bem-vindo(a), ${member}!`,
+      "",
+      `Voce e o membro numero ${member.guild.memberCount}.`,
+      `Conta criada ${accountAge}.`,
+      "",
+      "Leia as regras e aproveite a vila."
+    ].join("\n"),
+    allowedMentions: {
+      users: [member.id],
+      roles: []
+    },
+    embeds: [
+      {
+        color: 0xd62828,
+        author: {
+          name: `${member.user.tag} entrou no servidor`,
+          icon_url: member.user.displayAvatarURL({ size: 128 })
+        },
+        thumbnail: {
+          url: member.user.displayAvatarURL({ size: 256 })
+        },
+        fields: [
+          {
+            name: "Usuario",
+            value: `${member.user.username} (${member.id})`,
+            inline: false
+          },
+          {
+            name: "Criacao da conta",
+            value: `${formatDiscordTimestamp(member.user.createdAt, "F")}\n${accountAge}`,
+            inline: false
+          }
+        ],
+        timestamp: joinedAt.toISOString()
+      }
+    ]
+  });
+}
+
+async function sendGoodbyeMessage(member) {
+  const channel = findTextChannelByName(member.guild, goodbyeChannelName);
+
+  if (!channel) {
+    console.warn(`Goodbye channel not found: ${goodbyeChannelName}`);
+    return;
+  }
+
+  const roleNames = getPublicRoleNames(member);
+  const joinedAt = member.joinedAt
+    ? `${formatDiscordTimestamp(member.joinedAt, "F")}\n${formatDiscordTimestamp(member.joinedAt)}`
+    : "Nao consegui recuperar.";
+
+  await channel.send({
+    embeds: [
+      {
+        color: 0x4b5563,
+        author: {
+          name: `${member.user.tag} saiu do servidor`,
+          icon_url: member.user.displayAvatarURL({ size: 128 })
+        },
+        thumbnail: {
+          url: member.user.displayAvatarURL({ size: 256 })
+        },
+        fields: [
+          {
+            name: "Usuario",
+            value: `${member.user.username} (${member.id})`,
+            inline: false
+          },
+          {
+            name: "Entrou em",
+            value: joinedAt,
+            inline: false
+          },
+          {
+            name: "Cargos",
+            value: roleNames.length ? roleNames.join(", ") : "Nenhum cargo publico.",
+            inline: false
+          }
+        ],
+        timestamp: new Date().toISOString()
+      }
+    ]
+  });
 }
 
 async function handleStatus(interaction) {
@@ -439,6 +559,22 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   if (interaction.commandName === "organizar-servidor") {
     await handleOrganizeServer(interaction);
+  }
+});
+
+client.on(Events.GuildMemberAdd, async (member) => {
+  try {
+    await sendWelcomeMessage(member);
+  } catch (error) {
+    console.error("Failed to send welcome message:", error);
+  }
+});
+
+client.on(Events.GuildMemberRemove, async (member) => {
+  try {
+    await sendGoodbyeMessage(member);
+  } catch (error) {
+    console.error("Failed to send goodbye message:", error);
   }
 });
 
