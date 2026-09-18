@@ -63,18 +63,18 @@ const guildId = process.env.DISCORD_GUILD_ID;
 const statusEmojiId = process.env.DISCORD_STATUS_EMOJI_ID || "1550549602040815616";
 const statusEmojiName = process.env.DISCORD_STATUS_EMOJI_NAME || "LETSGO";
 const statusText =
-  process.env.DISCORD_STATUS_TEXT || "Eu caminho onde a luz nao alcanca...";
+  process.env.DISCORD_STATUS_TEXT || "Eu caminho onde a luz não alcança...";
 const welcomeChannelName = process.env.DISCORD_WELCOME_CHANNEL || "entrada";
 const goodbyeChannelName = process.env.DISCORD_GOODBYE_CHANNEL || "saida";
 
 if (!token) {
-  console.error("DISCORD_TOKEN nao foi configurado.");
-  console.error("Crie um arquivo .env ao lado do executavel ou use iniciar-kurokage.bat.");
+  console.error("DISCORD_TOKEN não foi configurado.");
+  console.error("Crie um arquivo .env ao lado do executável ou use iniciar-kurokage.bat.");
   process.exit(1);
 }
 
 if (!clientId) {
-  console.error("DISCORD_CLIENT_ID nao foi configurado.");
+  console.error("DISCORD_CLIENT_ID não foi configurado.");
   console.error("Use DISCORD_CLIENT_ID=1550503125000126574 no arquivo .env.");
   process.exit(1);
 }
@@ -219,7 +219,7 @@ async function sendWelcomeMessage(member) {
     content: [
       `Bem-vindo(a), ${member}!`,
       "",
-      `Voce e o membro numero ${member.guild.memberCount}.`,
+      `Você é o membro número ${member.guild.memberCount}.`,
       `Conta criada ${accountAge}.`,
       "",
       "Leia as regras e aproveite a vila."
@@ -240,12 +240,12 @@ async function sendWelcomeMessage(member) {
         },
         fields: [
           {
-            name: "Usuario",
+            name: "Usuário",
             value: `${member.user.username} (${member.id})`,
             inline: false
           },
           {
-            name: "Criacao da conta",
+            name: "Criação da conta",
             value: `${formatDiscordTimestamp(member.user.createdAt, "F")}\n${accountAge}`,
             inline: false
           }
@@ -267,7 +267,7 @@ async function sendGoodbyeMessage(member) {
   const roleNames = getPublicRoleNames(member);
   const joinedAt = member.joinedAt
     ? `${formatDiscordTimestamp(member.joinedAt, "F")}\n${formatDiscordTimestamp(member.joinedAt)}`
-    : "Nao consegui recuperar.";
+    : "Não consegui recuperar.";
 
   await channel.send({
     embeds: [
@@ -282,7 +282,7 @@ async function sendGoodbyeMessage(member) {
         },
         fields: [
           {
-            name: "Usuario",
+            name: "Usuário",
             value: `${member.user.username} (${member.id})`,
             inline: false
           },
@@ -293,7 +293,7 @@ async function sendGoodbyeMessage(member) {
           },
           {
             name: "Cargos",
-            value: roleNames.length ? roleNames.join(", ") : "Nenhum cargo publico.",
+            value: roleNames.length ? roleNames.join(", ") : "Nenhum cargo público.",
             inline: false
           }
         ],
@@ -309,7 +309,7 @@ async function handleStatus(interaction) {
   await interaction.reply({
     ephemeral: true,
     content: [
-      "Kurokage esta online.",
+      "Kurokage está online.",
       `Uptime: ${formatUptime(process.uptime())}`,
       `RAM: ${Math.round(memory.rss / 1024 / 1024)} MB`,
       `Node: ${process.version}`
@@ -349,7 +349,7 @@ async function handleAnnounce(interaction) {
   if (!hasPermission(interaction, PermissionFlagsBits.ManageGuild)) {
     await interaction.reply({
       ephemeral: true,
-      content: "Voce precisa da permissao Gerenciar Servidor."
+      content: "Você precisa da permissão Gerenciar Servidor."
     });
     return;
   }
@@ -360,7 +360,7 @@ async function handleAnnounce(interaction) {
   await channel.send(message);
   await interaction.reply({
     ephemeral: true,
-    content: `Anuncio enviado em #${channel.name}.`
+    content: `Anúncio enviado em #${channel.name}.`
   });
 }
 
@@ -368,7 +368,7 @@ async function handleClear(interaction) {
   if (!hasPermission(interaction, PermissionFlagsBits.ManageMessages)) {
     await interaction.reply({
       ephemeral: true,
-      content: "Voce precisa da permissao Gerenciar Mensagens."
+      content: "Você precisa da permissão Gerenciar Mensagens."
     });
     return;
   }
@@ -386,7 +386,7 @@ async function handleOrganizeServer(interaction) {
   if (!hasPermission(interaction, PermissionFlagsBits.ManageGuild)) {
     await interaction.reply({
       ephemeral: true,
-      content: "Voce precisa da permissao Gerenciar Servidor."
+      content: "Você precisa da permissão Gerenciar Servidor."
     });
     return;
   }
@@ -477,7 +477,7 @@ async function handleOrganizeServer(interaction) {
     ephemeral: true,
     content: created.length
       ? `Criado:\n${created.map((item) => `- ${item}`).join("\n")}`
-      : "Nada novo foi criado; a estrutura base ja existia."
+      : "Nada novo foi criado; a estrutura base já existia."
   });
 }
 
@@ -531,7 +531,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   if (interaction.commandName === "ping") {
     await interaction.reply({
-      content: "Pong. Kurokage esta online.",
+      content: "Pong. Kurokage está online.",
       ephemeral: true
     });
     return;
