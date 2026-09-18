@@ -1,5 +1,8 @@
 const {
+  ActionRowBuilder,
   ActivityType,
+  ButtonBuilder,
+  ButtonStyle,
   ChannelType,
   Client,
   Events,
@@ -66,6 +69,8 @@ const statusText =
   process.env.DISCORD_STATUS_TEXT || "Eu caminho onde a luz não alcança...";
 const welcomeChannelName = process.env.DISCORD_WELCOME_CHANNEL || "entrada";
 const goodbyeChannelName = process.env.DISCORD_GOODBYE_CHANNEL || "saida";
+const ticketCategoryName = process.env.DISCORD_TICKET_CATEGORY || "Tickets";
+const ticketStaffRoleNames = ["Daimyō", "Hokage", "Sannin", "Jōnin", "Anbu", "Chūnin"];
 
 if (!token) {
   console.error("DISCORD_TOKEN não foi configurado.");
@@ -142,6 +147,29 @@ const commands = [
         .setDescription("Use true to create missing categories/channels")
         .setRequired(true)
     )
+    .toJSON(),
+  new SlashCommandBuilder()
+    .setName("ticket-panel")
+    .setDescription("Create the ticket opening panel.")
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+    .addChannelOption((option) =>
+      option
+        .setName("canal")
+        .setDescription("Channel where the ticket panel will be posted")
+        .addChannelTypes(ChannelType.GuildText)
+        .setRequired(false)
+    )
+    .toJSON(),
+  new SlashCommandBuilder()
+    .setName("ticket-close")
+    .setDescription("Close the current ticket channel.")
+    .addStringOption((option) =>
+      option
+        .setName("motivo")
+        .setDescription("Reason for closing the ticket")
+        .setMaxLength(300)
+        .setRequired(false)
+    )
     .toJSON()
 ];
 
@@ -202,6 +230,239 @@ function getPublicRoleNames(member) {
     .filter((role) => role.name !== "@everyone" && !role.managed)
     .sort((a, b) => b.position - a.position)
     .map((role) => role.name);
+}
+
+function getTicketStaffRoles(guild) {
+  return ticketStaffRoleNames
+    .map((name) => guild.roles.cache.find((role) => role.name === name))
+    .filter(Boolean);
+}
+
+function buildTicketPermissionOverwrites(guild, userId) {
+  const staffRoles = getTicketStaffRoles(guild);
+
+  return [
+    {
+      id: guild.id,
+      deny: [PermissionFlagsBits.ViewChannel]
+    },
+    {
+      id: userId,
+      allow: [
+        PermissionFlagsBits.ViewChannel,
+        PermissionFlagsBits.SendMessages,
+        PermissionFlagsBits.ReadMessageHistory,
+        PermissionFlagsBits.AttachFiles,
+        PermissionFlagsBits.EmbedLinks,
+        PermissionFlagsBits.AddReactions
+      ]
+    },
+    {
+      id: guild.members.me.id,
+      allow: [
+        PermissionFlagsBits.ViewChannel,
+        PermissionFlagsBits.SendMessages,
+        PermissionFlagsBits.ReadMessageHistory,
+        PermissionFlagsBits.ManageChannels,
+        PermissionFlagsBits.ManageMessages
+      ]
+    },
+    ...staffRoles.map((role) => ({
+      id: role.id,
+      allow: [
+        PermissionFlagsBits.ViewChannel,
+        PermissionFlagsBits.SendMessages,
+        PermissionFlagsBits.ReadMessageHistory,
+        PermissionFlagsBits.ManageChannels,
+        PermissionFlagsBits.ManageMessages,
+        PermissionFlagsBits.AttachFiles,
+        PermissionFlagsBits.EmbedLinks
+      ]
+    }))
+  ];
+}
+
+async function getOrCreateTicketCategory(guild) {
+  const existing = guild.channels.cache.find(
+    (channel) =>
+      channel.type === ChannelType.GuildCategory &&
+      channel.name.toLowerCase() === ticketCategoryName.toLowerCase()
+  );
+
+  if (existing) {
+    return existing;
+  }
+
+  return guild.channels.create({
+    name: ticketCategoryName,
+    type: ChannelType.GuildCategory,
+    permissionOverwrites: [
+      {
+        id: guild.id,
+        deny: [PermissionFlagsBits.ViewChannel]
+      }
+    ]
+  });
+}
+
+function normalizeTicketName(username) {
+  return username
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+}
+
+function isTicketChannel(channel) {
+  return channel?.topic?.includes("ticket-owner:");
+}
+
+function getTicketOwnerId(channel) {
+  return channel?.topic?.match(/ticket-owner:(\d+)/)?.[1] ?? null;
+}
+
+function userCanManageTicket(interaction) {
+  if (hasPermission(interaction, PermissionFlagsBits.ManageChannels)) {
+    return true;
+  }
+
+  const memberRoleIds = new Set(interaction.member?.roles?.cache?.keys?.() ?? []);
+  return getTicketStaffRoles(interaction.guild).some((role) => memberRoleIds.has(role.id));
+}
+
+async function handleTicketPanel(interaction) {
+  if (!hasPermission(interaction, PermissionFlagsBits.ManageGuild)) {
+    await interaction.reply({
+      ephemeral: true,
+      content: "Você precisa da permissão Gerenciar Servidor."
+    });
+    return;
+  }
+
+  const channel = interaction.options.getChannel("canal") ?? interaction.channel;
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId("ticket:create")
+      .setLabel("Abrir ticket")
+      .setStyle(ButtonStyle.Primary)
+  );
+
+  await channel.send({
+    embeds: [
+      {
+        color: 0xd62828,
+        title: "Suporte",
+        description: [
+          "Precisa falar com a staff?",
+          "",
+          "Clique no botão abaixo para abrir um ticket privado."
+        ].join("\n")
+      }
+    ],
+    components: [row]
+  });
+
+  await interaction.reply({
+    ephemeral: true,
+    content: `Painel de tickets enviado em #${channel.name}.`
+  });
+}
+
+async function handleTicketCreate(interaction) {
+  await interaction.deferReply({ ephemeral: true });
+
+  const guild = interaction.guild;
+  const user = interaction.user;
+  const existing = guild.channels.cache.find(
+    (channel) =>
+      channel.type === ChannelType.GuildText &&
+      channel.topic?.includes(`ticket-owner:${user.id}`)
+  );
+
+  if (existing) {
+    await interaction.editReply(`Você já tem um ticket aberto: ${existing}.`);
+    return;
+  }
+
+  const category = await getOrCreateTicketCategory(guild);
+  const channel = await guild.channels.create({
+    name: `ticket-${normalizeTicketName(user.username) || user.id}`,
+    type: ChannelType.GuildText,
+    parent: category.id,
+    topic: `ticket-owner:${user.id}`,
+    permissionOverwrites: buildTicketPermissionOverwrites(guild, user.id)
+  });
+
+  await channel.send({
+    content: `${user} ${getTicketStaffRoles(guild).map((role) => `${role}`).join(" ")}`,
+    allowedMentions: {
+      users: [user.id],
+      roles: getTicketStaffRoles(guild).map((role) => role.id)
+    },
+    embeds: [
+      {
+        color: 0xd62828,
+        title: "Ticket aberto",
+        description: [
+          "Explique seu problema ou pedido com o máximo de detalhes possível.",
+          "",
+          "Quando terminar, use `/ticket-close` para fechar o ticket."
+        ].join("\n"),
+        fields: [
+          {
+            name: "Aberto por",
+            value: `${user.username} (${user.id})`,
+            inline: false
+          }
+        ],
+        timestamp: new Date().toISOString()
+      }
+    ]
+  });
+
+  await interaction.editReply(`Ticket criado: ${channel}.`);
+}
+
+async function handleTicketClose(interaction) {
+  const channel = interaction.channel;
+
+  if (!isTicketChannel(channel)) {
+    await interaction.reply({
+      ephemeral: true,
+      content: "Este comando só pode ser usado dentro de um ticket."
+    });
+    return;
+  }
+
+  const ownerId = getTicketOwnerId(channel);
+  const isOwner = ownerId === interaction.user.id;
+
+  if (!isOwner && !userCanManageTicket(interaction)) {
+    await interaction.reply({
+      ephemeral: true,
+      content: "Você não tem permissão para fechar este ticket."
+    });
+    return;
+  }
+
+  const reason = interaction.options.getString("motivo") ?? "Sem motivo informado.";
+
+  await interaction.reply({
+    content: [
+      `Ticket fechado por ${interaction.user}.`,
+      `Motivo: ${reason}`,
+      "",
+      "Este canal será apagado em 5 segundos."
+    ].join("\n")
+  });
+
+  setTimeout(() => {
+    channel.delete(`Ticket fechado por ${interaction.user.tag}: ${reason}`).catch((error) => {
+      console.error("Failed to delete ticket channel:", error);
+    });
+  }, 5000);
 }
 
 async function sendWelcomeMessage(member) {
@@ -525,6 +786,14 @@ client.once(Events.ClientReady, async (readyClient) => {
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
+  if (interaction.isButton()) {
+    if (interaction.customId === "ticket:create") {
+      await handleTicketCreate(interaction);
+    }
+
+    return;
+  }
+
   if (!interaction.isChatInputCommand()) {
     return;
   }
@@ -559,6 +828,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   if (interaction.commandName === "organizar-servidor") {
     await handleOrganizeServer(interaction);
+    return;
+  }
+
+  if (interaction.commandName === "ticket-panel") {
+    await handleTicketPanel(interaction);
+    return;
+  }
+
+  if (interaction.commandName === "ticket-close") {
+    await handleTicketClose(interaction);
   }
 });
 
