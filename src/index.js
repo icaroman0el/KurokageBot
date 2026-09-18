@@ -1,4 +1,5 @@
 const {
+  ActivityType,
   ChannelType,
   Client,
   Events,
@@ -59,6 +60,10 @@ loadEnvFile();
 const token = process.env.DISCORD_TOKEN;
 const clientId = process.env.DISCORD_CLIENT_ID;
 const guildId = process.env.DISCORD_GUILD_ID;
+const statusEmojiId = process.env.DISCORD_STATUS_EMOJI_ID || "1550549602040815616";
+const statusEmojiName = process.env.DISCORD_STATUS_EMOJI_NAME || "LETSGO";
+const statusText =
+  process.env.DISCORD_STATUS_TEXT || "Eu caminho onde a luz nao alcanca...";
 
 if (!token) {
   console.error("DISCORD_TOKEN nao foi configurado.");
@@ -377,7 +382,18 @@ client.once(Events.ClientReady, async (readyClient) => {
   console.log(`Kurokage is online as ${readyClient.user.tag}.`);
 
   readyClient.user.setPresence({
-    activities: [],
+    activities: [
+      {
+        name: "custom",
+        state: statusText,
+        type: ActivityType.Custom,
+        emoji: {
+          id: statusEmojiId,
+          name: statusEmojiName,
+          animated: false
+        }
+      }
+    ],
     status: "online"
   });
 
