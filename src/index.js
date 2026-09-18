@@ -161,6 +161,10 @@ const commands = [
     )
     .toJSON(),
   new SlashCommandBuilder()
+    .setName("ticket-open")
+    .setDescription("Open a private support ticket.")
+    .toJSON(),
+  new SlashCommandBuilder()
     .setName("ticket-close")
     .setDescription("Close the current ticket channel.")
     .addStringOption((option) =>
@@ -238,7 +242,7 @@ function getTicketStaffRoles(guild) {
     .filter(Boolean);
 }
 
-function buildTicketPermissionOverwrites(guild, userId) {
+function buildTicketPermissionOverwrites(guild, userId, botUserId) {
   const staffRoles = getTicketStaffRoles(guild);
 
   return [
@@ -258,7 +262,7 @@ function buildTicketPermissionOverwrites(guild, userId) {
       ]
     },
     {
-      id: guild.members.me.id,
+      id: botUserId,
       allow: [
         PermissionFlagsBits.ViewChannel,
         PermissionFlagsBits.SendMessages,
@@ -332,6 +336,62 @@ function userCanManageTicket(interaction) {
   return getTicketStaffRoles(interaction.guild).some((role) => memberRoleIds.has(role.id));
 }
 
+async function getOrCreateTicketLogChannel(guild) {
+  const category = await getOrCreateTicketCategory(guild);
+  const existing = guild.channels.cache.find(
+    (channel) =>
+      channel.type === ChannelType.GuildText &&
+      channel.name === "ticket-logs"
+  );
+
+  if (existing) {
+    return existing;
+  }
+
+  const staffRoles = getTicketStaffRoles(guild);
+
+  return guild.channels.create({
+    name: "ticket-logs",
+    type: ChannelType.GuildText,
+    parent: category.id,
+    topic: "Registros de tickets fechados.",
+    permissionOverwrites: [
+      {
+        id: guild.id,
+        deny: [PermissionFlagsBits.ViewChannel]
+      },
+      {
+        id: client.user.id,
+        allow: [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.ReadMessageHistory
+        ]
+      },
+      ...staffRoles.map((role) => ({
+        id: role.id,
+        allow: [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.ReadMessageHistory
+        ]
+      }))
+    ]
+  });
+}
+
+async function createTicketTranscript(channel) {
+  const messages = await channel.messages.fetch({ limit: 100 });
+  return messages
+    .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
+    .map((message) => {
+      const content = message.content || "[sem texto]";
+      return `[${new Date(message.createdTimestamp).toISOString()}] ${message.author.tag}: ${content}`;
+    })
+    .join("\n")
+    .slice(-1700);
+}
+
 async function handleTicketPanel(interaction) {
   if (!hasPermission(interaction, PermissionFlagsBits.ManageGuild)) {
     await interaction.reply({
@@ -370,9 +430,7 @@ async function handleTicketPanel(interaction) {
   });
 }
 
-async function handleTicketCreate(interaction) {
-  await interaction.deferReply({ ephemeral: true });
-
+async function createTicketForInteraction(interaction) {
   const guild = interaction.guild;
   const user = interaction.user;
   const existing = guild.channels.cache.find(
@@ -382,8 +440,10 @@ async function handleTicketCreate(interaction) {
   );
 
   if (existing) {
-    await interaction.editReply(`Você já tem um ticket aberto: ${existing}.`);
-    return;
+    return {
+      created: false,
+      message: `Você já tem um ticket aberto: ${existing}.`
+    };
   }
 
   const category = await getOrCreateTicketCategory(guild);
@@ -392,14 +452,16 @@ async function handleTicketCreate(interaction) {
     type: ChannelType.GuildText,
     parent: category.id,
     topic: `ticket-owner:${user.id}`,
-    permissionOverwrites: buildTicketPermissionOverwrites(guild, user.id)
+    permissionOverwrites: buildTicketPermissionOverwrites(guild, user.id, client.user.id)
   });
 
+  const staffRoles = getTicketStaffRoles(guild);
+
   await channel.send({
-    content: `${user} ${getTicketStaffRoles(guild).map((role) => `${role}`).join(" ")}`,
+    content: `${user} ${staffRoles.map((role) => `${role}`).join(" ")}`,
     allowedMentions: {
       users: [user.id],
-      roles: getTicketStaffRoles(guild).map((role) => role.id)
+      roles: staffRoles.map((role) => role.id)
     },
     embeds: [
       {
@@ -422,7 +484,16 @@ async function handleTicketCreate(interaction) {
     ]
   });
 
-  await interaction.editReply(`Ticket criado: ${channel}.`);
+  return {
+    created: true,
+    message: `Ticket criado: ${channel}.`
+  };
+}
+
+async function handleTicketCreate(interaction) {
+  await interaction.deferReply({ ephemeral: true });
+  const result = await createTicketForInteraction(interaction);
+  await interaction.editReply(result.message);
 }
 
 async function handleTicketClose(interaction) {
@@ -448,6 +519,53 @@ async function handleTicketClose(interaction) {
   }
 
   const reason = interaction.options.getString("motivo") ?? "Sem motivo informado.";
+  const transcript = await createTicketTranscript(channel).catch((error) => {
+    console.error("Failed to create ticket transcript:", error);
+    return "Não foi possível gerar o transcript.";
+  });
+  const logChannel = await getOrCreateTicketLogChannel(interaction.guild).catch((error) => {
+    console.error("Failed to get ticket log channel:", error);
+    return null;
+  });
+
+  if (logChannel) {
+    const ownerId = getTicketOwnerId(channel);
+    await logChannel.send({
+      embeds: [
+        {
+          color: 0x4b5563,
+          title: "Ticket fechado",
+          fields: [
+            {
+              name: "Canal",
+              value: `#${channel.name}`,
+              inline: true
+            },
+            {
+              name: "Aberto por",
+              value: ownerId ? `<@${ownerId}> (${ownerId})` : "Não identificado",
+              inline: false
+            },
+            {
+              name: "Fechado por",
+              value: `${interaction.user} (${interaction.user.id})`,
+              inline: false
+            },
+            {
+              name: "Motivo",
+              value: reason,
+              inline: false
+            }
+          ],
+          timestamp: new Date().toISOString()
+        }
+      ]
+    });
+
+    await logChannel.send({
+      content: `Transcript de #${channel.name}:\n\`\`\`\n${transcript || "Sem mensagens."}\n\`\`\``
+    });
+  }
 
   await interaction.reply({
     content: [
@@ -786,58 +904,75 @@ client.once(Events.ClientReady, async (readyClient) => {
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
-  if (interaction.isButton()) {
-    if (interaction.customId === "ticket:create") {
-      await handleTicketCreate(interaction);
+  try {
+    if (interaction.isButton()) {
+      if (interaction.customId === "ticket:create") {
+        await handleTicketCreate(interaction);
+      }
+
+      return;
     }
 
-    return;
-  }
+    if (!interaction.isChatInputCommand()) {
+      return;
+    }
 
-  if (!interaction.isChatInputCommand()) {
-    return;
-  }
+    if (interaction.commandName === "ping") {
+      await interaction.reply({
+        content: "Pong. Kurokage está online.",
+        ephemeral: true
+      });
+      return;
+    }
 
-  if (interaction.commandName === "ping") {
-    await interaction.reply({
-      content: "Pong. Kurokage está online.",
-      ephemeral: true
-    });
-    return;
-  }
+    if (interaction.commandName === "status") {
+      await handleStatus(interaction);
+      return;
+    }
 
-  if (interaction.commandName === "status") {
-    await handleStatus(interaction);
-    return;
-  }
+    if (interaction.commandName === "serverinfo") {
+      await handleServerInfo(interaction);
+      return;
+    }
 
-  if (interaction.commandName === "serverinfo") {
-    await handleServerInfo(interaction);
-    return;
-  }
+    if (interaction.commandName === "anunciar") {
+      await handleAnnounce(interaction);
+      return;
+    }
 
-  if (interaction.commandName === "anunciar") {
-    await handleAnnounce(interaction);
-    return;
-  }
+    if (interaction.commandName === "limpar") {
+      await handleClear(interaction);
+      return;
+    }
 
-  if (interaction.commandName === "limpar") {
-    await handleClear(interaction);
-    return;
-  }
+    if (interaction.commandName === "organizar-servidor") {
+      await handleOrganizeServer(interaction);
+      return;
+    }
 
-  if (interaction.commandName === "organizar-servidor") {
-    await handleOrganizeServer(interaction);
-    return;
-  }
+    if (interaction.commandName === "ticket-panel") {
+      await handleTicketPanel(interaction);
+      return;
+    }
 
-  if (interaction.commandName === "ticket-panel") {
-    await handleTicketPanel(interaction);
-    return;
-  }
+    if (interaction.commandName === "ticket-open") {
+      await handleTicketCreate(interaction);
+      return;
+    }
 
-  if (interaction.commandName === "ticket-close") {
-    await handleTicketClose(interaction);
+    if (interaction.commandName === "ticket-close") {
+      await handleTicketClose(interaction);
+    }
+  } catch (error) {
+    console.error("Interaction failed:", error);
+
+    const content = "Algo deu errado ao executar essa ação. A staff já pode verificar os logs do Kurokage.";
+
+    if (interaction.deferred || interaction.replied) {
+      await interaction.editReply({ content }).catch(() => null);
+    } else {
+      await interaction.reply({ content, ephemeral: true }).catch(() => null);
+    }
   }
 });
 
