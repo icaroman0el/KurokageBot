@@ -370,6 +370,17 @@ function messageHasCloseTicketButton(message) {
   );
 }
 
+function isTicketIntroMessage(message) {
+  return (
+    message.author.id === client.user.id &&
+    message.embeds.some((embed) => embed.title === "Ticket aberto")
+  );
+}
+
+function isDetachedTicketControlMessage(message) {
+  return message.author.id === client.user.id && message.content === "Controle do ticket:";
+}
+
 async function backfillTicketCloseControls(guild) {
   await guild.channels.fetch().catch((error) => {
     console.error("Failed to refresh guild channels before ticket backfill:", error);
@@ -378,15 +389,37 @@ async function backfillTicketCloseControls(guild) {
   const ticketChannels = guild.channels.cache.filter(
     (channel) => channel.type === ChannelType.GuildText && isTicketChannel(channel)
   );
+  let edited = 0;
   let sent = 0;
+  let deleted = 0;
 
   for (const channel of ticketChannels.values()) {
-    const messages = await channel.messages.fetch({ limit: 20 }).catch((error) => {
+    const messages = await channel.messages.fetch({ limit: 50 }).catch((error) => {
       console.error(`Failed to fetch ticket messages for ${channel.id}:`, error);
       return null;
     });
 
     if (!messages) {
+      continue;
+    }
+
+    const ticketIntro = messages.find((message) => isTicketIntroMessage(message));
+    const detachedControls = messages.filter(
+      (message) => isDetachedTicketControlMessage(message) && messageHasCloseTicketButton(message)
+    );
+
+    if (ticketIntro) {
+      if (!messageHasCloseTicketButton(ticketIntro)) {
+        await ticketIntro.edit({ components: [buildCloseTicketButtonRow()] });
+        edited++;
+      }
+
+      for (const message of detachedControls.values()) {
+        await message.delete().catch((error) => {
+          console.error(`Failed to delete detached ticket control ${message.id}:`, error);
+        });
+        deleted++;
+      }
       continue;
     }
 
@@ -403,7 +436,9 @@ async function backfillTicketCloseControls(guild) {
     sent++;
   }
 
-  console.log(`Ticket close controls checked: ${ticketChannels.size}, sent: ${sent}`);
+  console.log(
+    `Ticket close controls checked: ${ticketChannels.size}, edited: ${edited}, sent: ${sent}, deleted detached: ${deleted}`
+  );
 }
 
 async function getOrCreateTicketLogChannel(guild) {
