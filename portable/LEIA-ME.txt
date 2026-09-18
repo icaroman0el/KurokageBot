@@ -1,0 +1,21 @@
+Kurokage Discord Bot - versao portatil
+
+Como usar:
+
+1. Copie esta pasta para a outra maquina.
+2. Abra iniciar-kurokage.bat.
+3. Na primeira vez, cole o token novo do bot quando ele pedir.
+4. Deixe a janela aberta. Fechar a janela desliga o bot.
+
+Arquivos:
+
+- kurokage-bot.exe: executavel do bot.
+- iniciar-kurokage.bat: cria o .env na primeira execucao e inicia o bot.
+- .env: arquivo criado automaticamente com o token. Nao envie esse arquivo para ninguem.
+- .env.example: exemplo sem segredo.
+
+Requisitos:
+
+- Windows 10/11 64-bit.
+- Internet ativa.
+- A maquina nao pode entrar em suspensao.

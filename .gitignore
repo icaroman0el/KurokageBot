@@ -1,0 +1,9 @@
+node_modules/
+.env
+npm-debug.log*
+dist/
+*.zip
+portable/kurokage-bot.exe
+logs/
+data/
+backups/

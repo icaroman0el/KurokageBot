@@ -1,0 +1,27 @@
+{
+  "name": "kurokage-discord-bot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Discord bot for Quaxly hosting.",
+  "main": "src/index.js",
+  "bin": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "check": "node --check src/index.js",
+    "build:win": "pkg . --targets node22-win-x64 --output dist/kurokage-bot.exe --public --no-bytecode --public-packages \"*\""
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "discord.js": "^14.27.0"
+  },
+  "devDependencies": {
+    "@yao-pkg/pkg": "^6.22.0"
+  },
+  "pkg": {
+    "scripts": [
+      "src/**/*.js"
+    ]
+  }
+}
