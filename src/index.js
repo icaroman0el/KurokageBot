@@ -72,6 +72,8 @@ const welcomeChannelName = process.env.DISCORD_WELCOME_CHANNEL || "entrada";
 const goodbyeChannelName = process.env.DISCORD_GOODBYE_CHANNEL || "saida";
 const ticketCategoryName = process.env.DISCORD_TICKET_CATEGORY || "Tickets";
 const ticketStaffRoleNames = ["Daimyō", "Hokage", "Sannin", "Jōnin", "Anbu", "Chūnin"];
+const runtimeDataDir = process.pkg ? path.dirname(process.execPath) : process.cwd();
+const ticketStatePath = path.join(runtimeDataDir, "ticket-state.json");
 
 if (!token) {
   console.error("DISCORD_TOKEN não foi configurado.");
@@ -310,18 +312,65 @@ async function getOrCreateTicketCategory(guild) {
   });
 }
 
-function normalizeTicketName(username) {
-  return username
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 80);
-}
-
 function isTicketChannel(channel) {
   return channel?.topic?.includes("ticket-owner:");
+}
+
+function readTicketState() {
+  if (!fs.existsSync(ticketStatePath)) {
+    return { nextTicketNumber: 1 };
+  }
+
+  try {
+    const state = JSON.parse(fs.readFileSync(ticketStatePath, "utf8"));
+    return {
+      nextTicketNumber: Number.isInteger(state.nextTicketNumber) ? state.nextTicketNumber : 1
+    };
+  } catch (error) {
+    console.error("Failed to read ticket state:", error);
+    return { nextTicketNumber: 1 };
+  }
+}
+
+function saveTicketState(state) {
+  fs.writeFileSync(ticketStatePath, JSON.stringify(state, null, 2));
+}
+
+function getHighestTicketNumber(guild) {
+  return guild.channels.cache.reduce((highest, channel) => {
+    if (channel.type !== ChannelType.GuildText) {
+      return highest;
+    }
+
+    const match = channel.name.match(/^ticket-(\d+)$/);
+    if (!match) {
+      return highest;
+    }
+
+    return Math.max(highest, Number(match[1]));
+  }, 0);
+}
+
+function formatTicketChannelName(number) {
+  return `ticket-${String(number).padStart(4, "0")}`;
+}
+
+function reserveNextTicketChannelName(guild) {
+  const state = readTicketState();
+  let nextNumber = Math.max(state.nextTicketNumber, getHighestTicketNumber(guild) + 1);
+  let channelName = formatTicketChannelName(nextNumber);
+
+  while (
+    guild.channels.cache.some(
+      (channel) => channel.type === ChannelType.GuildText && channel.name === channelName
+    )
+  ) {
+    nextNumber++;
+    channelName = formatTicketChannelName(nextNumber);
+  }
+
+  saveTicketState({ nextTicketNumber: nextNumber + 1 });
+  return channelName;
 }
 
 function getTicketOwnerId(channel) {
@@ -439,6 +488,47 @@ async function backfillTicketCloseControls(guild) {
   console.log(
     `Ticket close controls checked: ${ticketChannels.size}, edited: ${edited}, sent: ${sent}, deleted detached: ${deleted}`
   );
+}
+
+async function scrubTicketCreatorHistory(guild) {
+  const logChannel = guild.channels.cache.find(
+    (channel) => channel.type === ChannelType.GuildText && channel.name === "ticket-logs"
+  );
+
+  if (!logChannel) {
+    return;
+  }
+
+  const messages = await logChannel.messages.fetch({ limit: 100 }).catch((error) => {
+    console.error("Failed to fetch ticket log messages for scrubbing:", error);
+    return null;
+  });
+
+  if (!messages) {
+    return;
+  }
+
+  let edited = 0;
+
+  for (const message of messages.values()) {
+    if (message.author.id !== client.user.id || message.embeds.length === 0) {
+      continue;
+    }
+
+    const embed = message.embeds[0].toJSON();
+    const fields = embed.fields ?? [];
+    const nextFields = fields.filter((field) => field.name !== "Aberto por");
+
+    if (nextFields.length === fields.length) {
+      continue;
+    }
+
+    embed.fields = nextFields;
+    await message.edit({ embeds: [embed] });
+    edited++;
+  }
+
+  console.log(`Ticket creator history scrubbed: ${edited}`);
 }
 
 async function getOrCreateTicketLogChannel(guild) {
@@ -564,8 +654,9 @@ async function createTicketForInteraction(interaction) {
 
   const category = await getOrCreateTicketCategory(guild);
   console.log(`Ticket category ready: ${category.id}`);
+  const ticketChannelName = reserveNextTicketChannelName(guild);
   const channel = await guild.channels.create({
-    name: `ticket-${normalizeTicketName(user.username) || user.id}`,
+    name: ticketChannelName,
     type: ChannelType.GuildText,
     parent: category.id,
     topic: `ticket-owner:${user.id}`,
@@ -576,9 +667,8 @@ async function createTicketForInteraction(interaction) {
   const staffRoles = getTicketStaffRoles(guild);
 
   await channel.send({
-    content: `${user} ${staffRoles.map((role) => `${role}`).join(" ")}`,
+    content: staffRoles.map((role) => `${role}`).join(" "),
     allowedMentions: {
-      users: [user.id],
       roles: staffRoles.map((role) => role.id)
     },
     embeds: [
@@ -590,13 +680,6 @@ async function createTicketForInteraction(interaction) {
           "",
           "Quando terminar, use o botão abaixo para fechar o ticket."
         ].join("\n"),
-        fields: [
-          {
-            name: "Aberto por",
-            value: `${user.username} (${user.id})`,
-            inline: false
-          }
-        ],
         timestamp: new Date().toISOString()
       }
     ],
@@ -722,7 +805,6 @@ async function handleTicketClose(interaction, reasonOverride = null, responseMod
   });
 
   if (logChannel) {
-    const ownerId = getTicketOwnerId(channel);
     await logChannel.send({
       embeds: [
         {
@@ -733,11 +815,6 @@ async function handleTicketClose(interaction, reasonOverride = null, responseMod
               name: "Canal",
               value: `#${channel.name}`,
               inline: true
-            },
-            {
-              name: "Aberto por",
-              value: ownerId ? `<@${ownerId}> (${ownerId})` : "Não identificado",
-              inline: false
             },
             {
               name: "Fechado por",
@@ -1102,6 +1179,7 @@ client.once(Events.ClientReady, async (readyClient) => {
   try {
     const guild = await client.guilds.fetch(guildId);
     await backfillTicketCloseControls(guild);
+    await scrubTicketCreatorHistory(guild);
   } catch (error) {
     console.error("Failed to backfill ticket close controls:", error);
   }
