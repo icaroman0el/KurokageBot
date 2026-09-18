@@ -337,6 +337,75 @@ function userCanManageTicket(interaction) {
   return getTicketStaffRoles(interaction.guild).some((role) => memberRoleIds.has(role.id));
 }
 
+function userCanCloseTicket(interaction) {
+  const ownerId = getTicketOwnerId(interaction.channel);
+  return ownerId === interaction.user.id || userCanManageTicket(interaction);
+}
+
+function buildCloseTicketButtonRow() {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId("ticket_close_request")
+      .setLabel("Fechar ticket")
+      .setStyle(ButtonStyle.Danger)
+  );
+}
+
+function buildCloseTicketConfirmRow() {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId("ticket_close_confirm")
+      .setLabel("Confirmar fechamento")
+      .setStyle(ButtonStyle.Danger),
+    new ButtonBuilder()
+      .setCustomId("ticket_close_cancel")
+      .setLabel("Cancelar")
+      .setStyle(ButtonStyle.Secondary)
+  );
+}
+
+function messageHasCloseTicketButton(message) {
+  return message.components.some((row) =>
+    row.components.some((component) => component.customId === "ticket_close_request")
+  );
+}
+
+async function backfillTicketCloseControls(guild) {
+  await guild.channels.fetch().catch((error) => {
+    console.error("Failed to refresh guild channels before ticket backfill:", error);
+  });
+
+  const ticketChannels = guild.channels.cache.filter(
+    (channel) => channel.type === ChannelType.GuildText && isTicketChannel(channel)
+  );
+  let sent = 0;
+
+  for (const channel of ticketChannels.values()) {
+    const messages = await channel.messages.fetch({ limit: 20 }).catch((error) => {
+      console.error(`Failed to fetch ticket messages for ${channel.id}:`, error);
+      return null;
+    });
+
+    if (!messages) {
+      continue;
+    }
+
+    const hasCloseButton = messages.some((message) => messageHasCloseTicketButton(message));
+
+    if (hasCloseButton) {
+      continue;
+    }
+
+    await channel.send({
+      content: "Controle do ticket:",
+      components: [buildCloseTicketButtonRow()]
+    });
+    sent++;
+  }
+
+  console.log(`Ticket close controls checked: ${ticketChannels.size}, sent: ${sent}`);
+}
+
 async function getOrCreateTicketLogChannel(guild) {
   const category = await getOrCreateTicketCategory(guild);
   const existing = guild.channels.cache.find(
@@ -484,7 +553,7 @@ async function createTicketForInteraction(interaction) {
         description: [
           "Explique seu problema ou pedido com o máximo de detalhes possível.",
           "",
-          "Quando terminar, use `/ticket-close` para fechar o ticket."
+          "Quando terminar, use o botão abaixo para fechar o ticket."
         ].join("\n"),
         fields: [
           {
@@ -495,7 +564,8 @@ async function createTicketForInteraction(interaction) {
         ],
         timestamp: new Date().toISOString()
       }
-    ]
+    ],
+    components: [buildCloseTicketButtonRow()]
   });
   console.log(`Ticket intro sent in channel: ${channel.id}`);
 
@@ -527,29 +597,86 @@ async function handleTicketButtonCreate(interaction) {
   });
 }
 
-async function handleTicketClose(interaction) {
+async function handleTicketCloseRequest(interaction) {
   const channel = interaction.channel;
 
   if (!isTicketChannel(channel)) {
     await interaction.reply({
-      ephemeral: true,
-      content: "Este comando só pode ser usado dentro de um ticket."
+      flags: MessageFlags.Ephemeral,
+      content: "Este botão só pode ser usado dentro de um ticket."
     });
     return;
   }
 
-  const ownerId = getTicketOwnerId(channel);
-  const isOwner = ownerId === interaction.user.id;
-
-  if (!isOwner && !userCanManageTicket(interaction)) {
+  if (!userCanCloseTicket(interaction)) {
     await interaction.reply({
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
       content: "Você não tem permissão para fechar este ticket."
     });
     return;
   }
 
-  const reason = interaction.options.getString("motivo") ?? "Sem motivo informado.";
+  await interaction.reply({
+    flags: MessageFlags.Ephemeral,
+    content: "Tem certeza que deseja fechar este ticket?",
+    components: [buildCloseTicketConfirmRow()]
+  });
+}
+
+async function handleTicketCloseCancel(interaction) {
+  await interaction.update({
+    content: "Fechamento cancelado.",
+    components: []
+  });
+}
+
+async function handleTicketCloseConfirm(interaction) {
+  const channel = interaction.channel;
+
+  if (!isTicketChannel(channel)) {
+    await interaction.update({
+      content: "Este botão só pode ser usado dentro de um ticket.",
+      components: []
+    });
+    return;
+  }
+
+  if (!userCanCloseTicket(interaction)) {
+    await interaction.update({
+      content: "Você não tem permissão para fechar este ticket.",
+      components: []
+    });
+    return;
+  }
+
+  await interaction.update({
+    content: "Fechando ticket...",
+    components: []
+  });
+
+  await handleTicketClose(interaction, "Fechado pelo botão.", "channel");
+}
+
+async function handleTicketClose(interaction, reasonOverride = null, responseMode = "reply") {
+  const channel = interaction.channel;
+
+  if (!isTicketChannel(channel)) {
+    await interaction.reply({
+      flags: MessageFlags.Ephemeral,
+      content: "Este comando só pode ser usado dentro de um ticket."
+    });
+    return;
+  }
+
+  if (!userCanCloseTicket(interaction)) {
+    await interaction.reply({
+      flags: MessageFlags.Ephemeral,
+      content: "Você não tem permissão para fechar este ticket."
+    });
+    return;
+  }
+
+  const reason = reasonOverride ?? interaction.options?.getString?.("motivo") ?? "Sem motivo informado.";
   const transcript = await createTicketTranscript(channel).catch((error) => {
     console.error("Failed to create ticket transcript:", error);
     return "Não foi possível gerar o transcript.";
@@ -598,14 +725,18 @@ async function handleTicketClose(interaction) {
     });
   }
 
-  await interaction.reply({
-    content: [
-      `Ticket fechado por ${interaction.user}.`,
-      `Motivo: ${reason}`,
-      "",
-      "Este canal será apagado em 5 segundos."
-    ].join("\n")
-  });
+  const closeNotice = [
+    `Ticket fechado por ${interaction.user}.`,
+    `Motivo: ${reason}`,
+    "",
+    "Este canal será apagado em 5 segundos."
+  ].join("\n");
+
+  if (responseMode === "channel") {
+    await channel.send({ content: closeNotice });
+  } else {
+    await interaction.reply({ content: closeNotice });
+  }
 
   setTimeout(() => {
     channel.delete(`Ticket fechado por ${interaction.user.tag}: ${reason}`).catch((error) => {
@@ -932,6 +1063,13 @@ client.once(Events.ClientReady, async (readyClient) => {
   } catch (error) {
     console.error("Failed to register slash commands:", error);
   }
+
+  try {
+    const guild = await client.guilds.fetch(guildId);
+    await backfillTicketCloseControls(guild);
+  } catch (error) {
+    console.error("Failed to backfill ticket close controls:", error);
+  }
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
@@ -943,6 +1081,22 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.isButton()) {
       if (interaction.customId === "ticket_open" || interaction.customId === "ticket:create") {
         await handleTicketButtonCreate(interaction);
+        return;
+      }
+
+      if (interaction.customId === "ticket_close_request") {
+        await handleTicketCloseRequest(interaction);
+        return;
+      }
+
+      if (interaction.customId === "ticket_close_confirm") {
+        await handleTicketCloseConfirm(interaction);
+        return;
+      }
+
+      if (interaction.customId === "ticket_close_cancel") {
+        await handleTicketCloseCancel(interaction);
+        return;
       }
 
       return;
