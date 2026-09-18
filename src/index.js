@@ -404,7 +404,7 @@ async function handleTicketPanel(interaction) {
   const channel = interaction.options.getChannel("canal") ?? interaction.channel;
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-      .setCustomId("ticket:create")
+      .setCustomId("ticket_open")
       .setLabel("Abrir ticket")
       .setStyle(ButtonStyle.Primary)
   );
@@ -905,8 +905,12 @@ client.once(Events.ClientReady, async (readyClient) => {
 
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
+    console.log(
+      `Interaction received: id=${interaction.id} type=${interaction.type} command=${interaction.commandName ?? ""} customId=${interaction.customId ?? ""}`
+    );
+
     if (interaction.isButton()) {
-      if (interaction.customId === "ticket:create") {
+      if (interaction.customId === "ticket_open" || interaction.customId === "ticket:create") {
         await handleTicketCreate(interaction);
       }
 
