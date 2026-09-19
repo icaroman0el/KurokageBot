@@ -8,10 +8,13 @@ const {
   Events,
   GatewayIntentBits,
   MessageFlags,
+  ModalBuilder,
   PermissionFlagsBits,
   REST,
   Routes,
-  SlashCommandBuilder
+  SlashCommandBuilder,
+  TextInputBuilder,
+  TextInputStyle
 } = require("discord.js");
 const fs = require("fs");
 const path = require("path");
@@ -413,6 +416,23 @@ function buildCloseTicketConfirmRow() {
   );
 }
 
+function buildCloseTicketReasonModal(channelId) {
+  return new ModalBuilder()
+    .setCustomId(`ticket_close_reason:${channelId}`)
+    .setTitle("Fechar ticket")
+    .addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId("reason")
+          .setLabel("Motivo do fechamento")
+          .setStyle(TextInputStyle.Paragraph)
+          .setPlaceholder("Ex.: dúvida resolvida, atendimento finalizado...")
+          .setRequired(false)
+          .setMaxLength(300)
+      )
+    );
+}
+
 function messageHasCloseTicketButton(message) {
   return message.components.some((row) =>
     row.components.some((component) => component.customId === "ticket_close_request")
@@ -734,11 +754,7 @@ async function handleTicketCloseRequest(interaction) {
     return;
   }
 
-  await interaction.reply({
-    flags: MessageFlags.Ephemeral,
-    content: "Tem certeza que deseja fechar este ticket?",
-    components: [buildCloseTicketConfirmRow()]
-  });
+  await interaction.showModal(buildCloseTicketReasonModal(channel.id));
 }
 
 async function handleTicketCloseCancel(interaction) {
@@ -767,12 +783,38 @@ async function handleTicketCloseConfirm(interaction) {
     return;
   }
 
-  await interaction.update({
-    content: "Fechando ticket...",
-    components: []
+  await interaction.showModal(buildCloseTicketReasonModal(channel.id));
+}
+
+async function handleTicketCloseReasonSubmit(interaction) {
+  const channel = interaction.channel;
+  const expectedChannelId = interaction.customId.split(":")[1];
+
+  if (!isTicketChannel(channel) || channel.id !== expectedChannelId) {
+    await interaction.reply({
+      flags: MessageFlags.Ephemeral,
+      content: "Este formulário só pode ser usado dentro do ticket original."
+    });
+    return;
+  }
+
+  if (!userCanCloseTicket(interaction)) {
+    await interaction.reply({
+      flags: MessageFlags.Ephemeral,
+      content: "Você não tem permissão para fechar este ticket."
+    });
+    return;
+  }
+
+  const reason =
+    interaction.fields.getTextInputValue("reason").trim() || "Sem motivo informado.";
+
+  await interaction.reply({
+    flags: MessageFlags.Ephemeral,
+    content: "Fechando ticket..."
   });
 
-  await handleTicketClose(interaction, "Fechado pelo botão.", "channel");
+  await handleTicketClose(interaction, reason, "channel");
 }
 
 async function handleTicketClose(interaction, reasonOverride = null, responseMode = "reply") {
@@ -1209,6 +1251,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       if (interaction.customId === "ticket_close_cancel") {
         await handleTicketCloseCancel(interaction);
+        return;
+      }
+
+      return;
+    }
+
+    if (interaction.isModalSubmit()) {
+      if (interaction.customId.startsWith("ticket_close_reason:")) {
+        await handleTicketCloseReasonSubmit(interaction);
         return;
       }
 
